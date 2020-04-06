@@ -1,5 +1,15 @@
 use kepler::prelude::*;
 
 fn main() {
-    let game = Game::new("Hello World");
+    let mut game = Game::new("Hello World");
+
+    game.create_entity()
+        .with(components::Position {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .build();
+
+    game.launch();
 }

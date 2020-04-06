@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use specs::prelude::*;
 
 pub struct Game {
     world: World,
@@ -12,5 +11,13 @@ impl Game {
         components::register_all(&mut world);
         let window = Window::new(name);
         Game { world, window }
+    }
+
+    pub fn create_entity(&mut self) -> EntityBuilder {
+        self.world.create_entity()
+    }
+
+    pub fn launch(self) -> ! {
+        self.window.start_event_loop(|| {});
     }
 }
