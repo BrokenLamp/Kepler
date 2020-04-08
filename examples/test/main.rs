@@ -1,7 +1,7 @@
 use kepler::prelude::*;
 
 fn main() {
-    let mut game = Game::new("Hello World");
+    let mut game = Game::new("Kepler Engine");
 
     game.create_entity()
         .with(components::Position {

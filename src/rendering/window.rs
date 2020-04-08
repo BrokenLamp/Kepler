@@ -1,35 +1,5 @@
-#![cfg_attr(
-    not(any(
-        feature = "vulkan",
-        feature = "dx11",
-        feature = "dx12",
-        feature = "metal",
-        feature = "gl",
-        feature = "wgl"
-    )),
-    allow(dead_code, unused_extern_crates, unused_imports)
-)]
-
-#[cfg(feature = "dx11")]
-extern crate gfx_backend_dx11 as back;
-#[cfg(feature = "dx12")]
-extern crate gfx_backend_dx12 as back;
-#[cfg(any(feature = "gl", feature = "wgl"))]
-extern crate gfx_backend_gl as back;
-#[cfg(feature = "metal")]
-extern crate gfx_backend_metal as back;
-#[cfg(feature = "vulkan")]
-extern crate gfx_backend_vulkan as back;
-
-#[cfg(not(any(
-    feature = "vulkan",
-    feature = "dx11",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl",
-    feature = "wgl"
-)))]
-extern crate gfx_backend_empty as back;
+use super::backend::{backend, BACKEND_NAME};
+use super::renderer::Renderer;
 
 use gfx_hal::{
     buffer, command, format as f,
@@ -59,7 +29,7 @@ use std::{
     ptr,
 };
 
-const DIMS: window::Extent2D = window::Extent2D {
+pub const DIMS: window::Extent2D = window::Extent2D {
     width: 1280,
     height: 720,
 };
@@ -67,6 +37,7 @@ const DIMS: window::Extent2D = window::Extent2D {
 pub struct Window {
     winit_window: winit::window::Window,
     event_loop: EventLoop<()>,
+    renderer: Renderer<backend::Backend>,
 }
 
 impl Window {
@@ -76,21 +47,55 @@ impl Window {
         let window = WindowBuilder::new()
             .with_min_inner_size(Size::Logical(LogicalSize::new(240.0, 135.0)))
             .with_inner_size(Size::Physical(PhysicalSize::new(DIMS.width, DIMS.height)))
-            .with_title(format!("{} - Vulkan", name))
+            .with_title(format!("{} - {}", name, BACKEND_NAME))
             .build(&event_loop)
             .unwrap();
 
-        let instance = back::Instance::create("kepler game", 1).expect("Failed to create instance");
-        let surface = unsafe {
-            instance
-                .create_surface(&window)
-                .expect("Failed to create surface")
+        #[cfg(not(feature = "gl"))]
+        let (window, instance, mut adapters, surface) = {
+            let instance =
+                backend::Instance::create("kepler game", 1).expect("Failed to create instance");
+            let surface = unsafe {
+                instance
+                    .create_surface(&window)
+                    .expect("Failed to create surface")
+            };
+            let mut adapters = instance.enumerate_adapters();
+            (window, Some(instance), adapters, surface)
         };
-        let adapters = instance.enumerate_adapters();
+
+        #[cfg(feature = "gl")]
+        let (window, instance, mut adapters, surface) = {
+            let builder = backend::config_context(
+                backend::glutin::ContextBuilder::new(),
+                ColorFormat::SELF,
+                None,
+            )
+            .with_vsync(true);
+            let windowed_context = builder.build_windowed(window_builder, &event_loop).unwrap();
+            let (context, window) = unsafe {
+                windowed_context
+                    .make_current()
+                    .expect("Unable to make context current")
+                    .split()
+            };
+            let surface = backend::Surface::from_context(context);
+            let adapters = surface.enumerate_adapters();
+            (window, None, adapters, surface)
+        };
+
+        for adapter in &adapters {
+            println!("{:?}", adapter.info);
+        }
+
+        let adapter = adapters.remove(0);
+
+        let renderer = Renderer::new(instance, surface, adapter);
 
         Window {
             winit_window: window,
             event_loop,
+            renderer,
         }
     }
 
@@ -100,16 +105,42 @@ impl Window {
     {
         let winit_window = self.winit_window;
         let event_loop = self.event_loop;
+        let mut renderer = self.renderer;
+        renderer.render();
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
 
             match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    window_id,
-                } if window_id == winit_window.id() => *control_flow = ControlFlow::Exit,
+                winit::event::Event::WindowEvent { event, .. } => match event {
+                    winit::event::WindowEvent::CloseRequested => {
+                        *control_flow = winit::event_loop::ControlFlow::Exit
+                    }
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            winit::event::KeyboardInput {
+                                virtual_keycode: Some(winit::event::VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => *control_flow = winit::event_loop::ControlFlow::Exit,
+                    winit::event::WindowEvent::Resized(dims) => {
+                        println!("resized to {:?}", dims);
+                        #[cfg(all(feature = "gl", not(target_arch = "wasm32")))]
+                        {
+                            let context = renderer.surface.context();
+                            context.resize(dims);
+                        }
+                        renderer.dimensions = window::Extent2D {
+                            width: dims.width,
+                            height: dims.height,
+                        };
+                        renderer.recreate_swapchain();
+                    }
+                    _ => {}
+                },
                 Event::RedrawEventsCleared => {
                     on_render();
+                    renderer.render();
                 }
                 _ => (),
             }
